@@ -5,6 +5,7 @@ import asyncio
 import multiprocessing as mp
 import os
 import subprocess
+import sys
 import time
 import traceback
 from dataclasses import dataclass
@@ -159,6 +160,76 @@ def gpu_worker_process(
     """
     os.environ["CUDA_VISIBLE_DEVICES"] = cuda_device
     os.environ["FASTVIDEO_ATTENTION_BACKEND"] = "FLASH_ATTN"
+
+    # Windows: dreamverse worker -> fastvideo multiproc_executor worker is
+    # nested multiprocessing. Each level creates Queue feeder threads + locks.
+    # Default thread-pool sizes (OMP=N_cores, tokenizers parallelism, torch
+    # threads) compound into >10k kernel objects, exhausting the per-process
+    # mutex allocator and crashing with:
+    #     RuntimeError: can't allocate lock
+    #     ValueError: semaphore or lock released too many times
+    # mid-checkpoint-load. Cap every thread-pool we know about to 1; the
+    # work is GPU-bound so CPU concurrency wins us nothing.
+    if sys.platform == "win32":
+        os.environ["OMP_NUM_THREADS"] = "1"
+        os.environ["MKL_NUM_THREADS"] = "1"
+        os.environ["OPENBLAS_NUM_THREADS"] = "1"
+        os.environ["NUMEXPR_NUM_THREADS"] = "1"
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        # Also cap torch threading inside the worker.
+        try:
+            import torch
+            torch.set_num_threads(1)
+            torch.set_num_interop_threads(1)
+        except Exception:
+            pass
+
+    # Tee stdout+stderr to a per-GPU log file so worker exceptions survive
+    # the parent's subprocess pipe dying. On Windows + py3.12 + spawn, the
+    # parent's `_readerthread` (subprocess.py:1599) routinely raises
+    # `ValueError: I/O operation on closed file.` mid-startup, which loses
+    # any buffered worker output — including the `[GPU 0] Init error: ...`
+    # print + traceback that gpu_pool.py:328 emits when worker.initialize()
+    # raises. Without this tee the parent terminal shows nothing useful;
+    # with it, the full traceback lands in <repo>/apps/dreamverse/outputs/
+    # gpu_<id>_worker.log regardless of pipe state.
+    import sys as _sys
+    from pathlib import Path as _Path
+    _log_dir = _Path(__file__).resolve().parent.parent / "outputs"
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _log_path = _log_dir / f"gpu_{gpu_id}_worker.log"
+    _log_file = open(_log_path, "w", buffering=1, encoding="utf-8", errors="replace")
+    _log_file.write(f"# gpu_worker_process pid={os.getpid()} gpu_id={gpu_id} cuda_device={cuda_device}\n")
+    _log_file.flush()
+
+    class _TeeStream:
+        """Write to underlying stream AND log file. Best-effort: never raise."""
+        def __init__(self, primary, secondary):
+            self._primary = primary
+            self._secondary = secondary
+        def write(self, s):
+            try:
+                self._primary.write(s)
+            except Exception:
+                pass  # parent pipe may be dead; keep going
+            try:
+                self._secondary.write(s)
+                self._secondary.flush()
+            except Exception:
+                pass
+            return len(s) if s else 0
+        def flush(self):
+            for stream in (self._primary, self._secondary):
+                try:
+                    stream.flush()
+                except Exception:
+                    pass
+        def __getattr__(self, name):
+            return getattr(self._primary, name)
+
+    _sys.stdout = _TeeStream(_sys.stdout, _log_file)
+    _sys.stderr = _TeeStream(_sys.stderr, _log_file)
+    print(f"[GPU {gpu_id}] Worker logging to: {_log_path}")
 
     from dreamverse.video_generation import VideoGenerationWorker
 
@@ -442,8 +513,12 @@ class GPUSlot:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self.process.start)
 
-        # Send init command and wait for response
-        init_response = await self._send_command(Command(CommandType.INIT), timeout=600.0)
+        # Send init command and wait for response. Default 600s is fine when
+        # the HF cache is already populated; first-run downloads on Windows
+        # (where hf_xet symlink-based accel is opt-in) can take 30-90 min, so
+        # let users override via DREAMVERSE_INIT_TIMEOUT_S.
+        _init_timeout = float(os.environ.get("DREAMVERSE_INIT_TIMEOUT_S", "600"))
+        init_response = await self._send_command(Command(CommandType.INIT), timeout=_init_timeout)
         if not isinstance(init_response, InitAck) or not init_response.success:
             error_msg = (init_response.error if isinstance(init_response, InitAck) else
                          f"unexpected init response: {type(init_response).__name__}")
@@ -497,32 +572,51 @@ class GPUSlot:
 
         response_fut = loop.run_in_executor(None, lambda: self.response_queue.get(timeout=timeout))
 
+        # Process-death watcher.  On Unix we use loop.add_reader() on the
+        # sentinel fd — kernel-level, ~10 ms latency, zero polling cost.
+        # On Windows the default ProactorEventLoop does NOT implement
+        # add_reader (raises NotImplementedError), so we fall back to
+        # multiprocessing.connection.wait() in an executor thread (also
+        # blocks on the Win32 sentinel handle, but uses a thread instead
+        # of being integrated into the event loop's selector).
         death_fut: asyncio.Future | None = None
         sentinel_fd = process.sentinel if process is not None else None
+        _is_windows = sys.platform == "win32"
 
         if sentinel_fd is not None:
-            death_fut = loop.create_future()
+            if _is_windows:
+                # mp.connection.wait accepts process.sentinel on both Unix
+                # and Windows; run it in a thread so the loop stays free.
+                death_fut = loop.run_in_executor(
+                    None, mp.connection.wait, [sentinel_fd])
+            else:
+                death_fut = loop.create_future()
 
-            def _on_death() -> None:
-                try:
-                    loop.remove_reader(sentinel_fd)
-                except (ValueError, OSError):
-                    pass
-                if death_fut is not None and not death_fut.done():
-                    death_fut.set_result(None)
+                def _on_death() -> None:
+                    try:
+                        loop.remove_reader(sentinel_fd)
+                    except (ValueError, OSError):
+                        pass
+                    if death_fut is not None and not death_fut.done():
+                        death_fut.set_result(None)
 
-            loop.add_reader(sentinel_fd, _on_death)
+                loop.add_reader(sentinel_fd, _on_death)
 
         waiters = [response_fut] + ([death_fut] if death_fut is not None else [])
         try:
             done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
         finally:
-            if (sentinel_fd is not None and death_fut is not None and not death_fut.done()):
-                try:
-                    loop.remove_reader(sentinel_fd)
-                except (ValueError, OSError):
-                    pass
-                death_fut.cancel()
+            if death_fut is not None and not death_fut.done():
+                if _is_windows:
+                    # Cancel the executor wait so the thread doesn't sit
+                    # blocked on a sentinel that may never trigger this run.
+                    death_fut.cancel()
+                else:
+                    try:
+                        loop.remove_reader(sentinel_fd)
+                    except (ValueError, OSError):
+                        pass
+                    death_fut.cancel()
 
         if (death_fut is not None and death_fut in done and response_fut not in done):
             try:
@@ -946,16 +1040,27 @@ def get_available_gpus() -> list[int]:
         visible_gpu_ids = [int(x.strip()) for x in cuda_visible.split(",") if x.strip()]
         return _limit_gpu_ids(visible_gpu_ids)
 
-    # Auto-detect available GPUs
+    # Auto-detect available GPUs.
+    #
+    # Previously this called `subprocess.run(["nvidia-smi", ...], capture_output=True)`,
+    # which spawned two stdlib `_readerthread`s to drain the child's stdout / stderr
+    # pipes. On Windows + py3.12, those reader threads sometimes race with their pipe
+    # being closed (Popen cleanup vs reader thread mid-`fh.read()`), surfacing as two
+    # `ValueError: I/O operation on closed file.` tracebacks at dreamverse boot. The
+    # subprocess.run itself still returned the right answer, but the noise drowned
+    # out the real worker output and looked like a startup failure.
+    #
+    # torch.cuda.device_count() gives the exact same GPU count via the CUDA driver,
+    # no subprocess, no pipes, no reader threads. (We deliberately don't import torch
+    # at module top -- it pulls in fastvideo's whole stack -- so do it lazily here.)
     try:
-        result = subprocess.run(["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
-                                capture_output=True,
-                                text=True)
-        if result.returncode == 0:
-            detected_gpu_ids = [int(x.strip()) for x in result.stdout.strip().split("\n") if x.strip()]
-            print(f"Auto-detected GPU IDs: {detected_gpu_ids}")
+        import torch  # lazy
+        n = torch.cuda.device_count()
+        if n > 0:
+            detected_gpu_ids = list(range(n))
+            print(f"Auto-detected GPU IDs (via torch.cuda): {detected_gpu_ids}")
             return _limit_gpu_ids(detected_gpu_ids)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[get_available_gpus] torch.cuda probe failed ({e}); falling back to [0]")
 
     return _limit_gpu_ids([0])
