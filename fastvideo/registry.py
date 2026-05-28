@@ -31,6 +31,7 @@ from fastvideo.configs.pipelines.lingbotworld import LingBotWorldI2V480PConfig
 from fastvideo.configs.pipelines.longcat import LongCatT2V480PConfig
 from fastvideo.pipelines.basic.ltx2.pipeline_configs import LTX2T2VConfig
 from fastvideo.configs.pipelines.matrixgame2 import MatrixGame2I2V480PConfig
+from fastvideo.configs.pipelines.matrixgame3 import MatrixGame3I2V720PConfig
 from fastvideo.configs.pipelines.sana_wm import SanaWM720PConfig
 from fastvideo.configs.pipelines.turbodiffusion import (
     TurboDiffusionI2V_A14B_Config,
@@ -55,6 +56,7 @@ from fastvideo.configs.pipelines.sd35 import SD35Config
 from fastvideo.configs.pipelines.stable_audio import (StableAudioOpenSmallConfig, StableAudioT2AConfig)
 from fastvideo.api.sampling_param import SamplingParam
 from fastvideo.api.matrixgame2 import MatrixGame2SamplingParam
+from fastvideo.api.matrixgame3 import MatrixGame3SamplingParam
 from fastvideo.api.sana_wm import SanaWMSamplingParam
 
 from fastvideo.fastvideo_args import WorkloadType
@@ -485,10 +487,32 @@ def _register_configs() -> None:
             "FastVideo/Matrix-Game-2.0-TempleRun-Diffusers",
         ],
         model_detectors=[
-            lambda path: "matrix-game" in path.lower() or "matrixgame" in path.lower(),
+            lambda path: any(token in path.lower() for token in (
+                "matrix-game-2",
+                "matrixgame2",
+                "matrix-game-2.0",
+            )),
         ],
         model_family="matrixgame",
         default_preset="matrixgame2_i2v",
+    )
+    # MatrixGame 3.0 (I2V)
+    register_configs(
+        sampling_param_cls=MatrixGame3SamplingParam,
+        pipeline_config_cls=MatrixGame3I2V720PConfig,
+        workload_types=(WorkloadType.I2V, ),
+        hf_model_paths=[
+            "FastVideo/Matrix-Game-3.0-Base-Distilled-Diffusers",
+        ],
+        model_detectors=[
+            lambda path: any(token in path.lower() for token in (
+                "matrix-game-3",
+                "matrixgame3",
+                "matrix-game-3.0",
+            )),
+        ],
+        model_family="matrixgame",
+        default_preset="matrixgame3_i2v",
     )
 
     # SANA-WM bidirectional (T2V + camera control)
@@ -876,6 +900,8 @@ def _register_presets() -> None:
         ALL_PRESETS as LTX2_PRESETS, )
     from fastvideo.pipelines.basic.matrixgame2.presets import (
         ALL_PRESETS as MATRIXGAME2_PRESETS, )
+    from fastvideo.pipelines.basic.matrixgame3.presets import (
+        ALL_PRESETS as MATRIXGAME3_PRESETS, )
     from fastvideo.pipelines.basic.sana_wm.presets import (
         ALL_PRESETS as SANA_WM_PRESETS, )
     from fastvideo.pipelines.basic.sd35.presets import (
@@ -898,6 +924,7 @@ def _register_presets() -> None:
         LONGCAT_PRESETS,
         LTX2_PRESETS,
         MATRIXGAME2_PRESETS,
+        MATRIXGAME3_PRESETS,
         SANA_WM_PRESETS,
         SD35_PRESETS,
         STABLE_AUDIO_PRESETS,
