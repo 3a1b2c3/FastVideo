@@ -23,6 +23,9 @@ Miniconda3-latest-Linux-x86_64.sh
 data/
 outputs/
 outputs_video
+video_samples_matrixgame2/
+*.frames.npz
+*.npz
 checkpoints/
 sbatch.sh
 *.out
