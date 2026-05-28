@@ -31,6 +31,7 @@ from fastvideo.configs.pipelines.lingbotworld import LingBotWorldI2V480PConfig
 from fastvideo.configs.pipelines.longcat import LongCatT2V480PConfig
 from fastvideo.pipelines.basic.ltx2.pipeline_configs import LTX2T2VConfig
 from fastvideo.configs.pipelines.matrixgame2 import MatrixGame2I2V480PConfig
+from fastvideo.configs.pipelines.sana_wm import SanaWM720PConfig
 from fastvideo.configs.pipelines.turbodiffusion import (
     TurboDiffusionI2V_A14B_Config,
     TurboDiffusionT2V_14B_Config,
@@ -54,6 +55,7 @@ from fastvideo.configs.pipelines.sd35 import SD35Config
 from fastvideo.configs.pipelines.stable_audio import (StableAudioOpenSmallConfig, StableAudioT2AConfig)
 from fastvideo.api.sampling_param import SamplingParam
 from fastvideo.api.matrixgame2 import MatrixGame2SamplingParam
+from fastvideo.api.sana_wm import SanaWMSamplingParam
 
 from fastvideo.fastvideo_args import WorkloadType
 from fastvideo.logger import init_logger
@@ -489,6 +491,21 @@ def _register_configs() -> None:
         default_preset="matrixgame2_i2v",
     )
 
+    # SANA-WM bidirectional (T2V + camera control)
+    register_configs(
+        sampling_param_cls=SanaWMSamplingParam,
+        pipeline_config_cls=SanaWM720PConfig,
+        workload_types=(WorkloadType.T2V, ),
+        hf_model_paths=[
+            "Efficient-Large-Model/SANA-WM_bidirectional",
+        ],
+        model_detectors=[
+            lambda path: "sana-wm" in path.lower() or "sana_wm" in path.lower(),
+        ],
+        model_family="sana_wm",
+        default_preset="sana_wm_720p",
+    )
+
     # GEN3C (must register before generic Cosmos detector)
     register_configs(
         sampling_param_cls=None,
@@ -859,6 +876,8 @@ def _register_presets() -> None:
         ALL_PRESETS as LTX2_PRESETS, )
     from fastvideo.pipelines.basic.matrixgame2.presets import (
         ALL_PRESETS as MATRIXGAME2_PRESETS, )
+    from fastvideo.pipelines.basic.sana_wm.presets import (
+        ALL_PRESETS as SANA_WM_PRESETS, )
     from fastvideo.pipelines.basic.sd35.presets import (
         ALL_PRESETS as SD35_PRESETS, )
     from fastvideo.pipelines.basic.stable_audio.presets import (
@@ -879,6 +898,7 @@ def _register_presets() -> None:
         LONGCAT_PRESETS,
         LTX2_PRESETS,
         MATRIXGAME2_PRESETS,
+        SANA_WM_PRESETS,
         SD35_PRESETS,
         STABLE_AUDIO_PRESETS,
         TURBODIFFUSION_PRESETS,

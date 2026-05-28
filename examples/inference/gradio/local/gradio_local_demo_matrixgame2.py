@@ -541,16 +541,22 @@ def create_gradio_interface(generators: dict[str, StreamingVideoGenerator], load
                     print(f"Warning: cleanup error: {e}")
             
             # Streaming parameters
-            num_latent_frames_per_block = 3
+            # Smallest practical block: 2 latent frames (8 video frames). Block=1
+            # is sometimes accepted but matrixgame2's KV-cache write window assumes
+            # >=2 frames per fused pass; going to 1 tends to produce zeros or NaNs.
+            num_latent_frames_per_block = 2
             max_blocks = 50
             total_latent_frames = num_latent_frames_per_block * max_blocks
             num_frames = (total_latent_frames - 1) * 4 + 1
-            
+
             actions = {
                 "keyboard": torch.zeros((num_frames, config["keyboard_dim"])),
                 "mouse": torch.zeros((num_frames, 2))
             }
-            grid_sizes = torch.tensor([150, 44, 80])
+            # grid_sizes = (total_latent_frames, latent_h, latent_w) where latent_h/w
+            # are pixel/8 (VAE downscale). Resolution shrunk from 352x640 -> 256x384
+            # so latent_h=32, latent_w=48. grid_sizes[0]=2*50=100 matches block*max.
+            grid_sizes = torch.tensor([total_latent_frames, 32, 48])
             
             output_dir = os.path.abspath("outputs/matrixgame2")
             os.makedirs(output_dir, exist_ok=True)
@@ -563,8 +569,8 @@ def create_gradio_interface(generators: dict[str, StreamingVideoGenerator], load
                 keyboard_cond=actions["keyboard"].unsqueeze(0),
                 grid_sizes=grid_sizes,
                 num_frames=num_frames,
-                height=352,
-                width=640,
+                height=256,
+                width=384,
                 num_inference_steps=50,
                 output_path=video_path,
             )

@@ -510,10 +510,16 @@ class VideoGenerationWorker:
             return audio_latents
         return None
 
-    def warmup(self, prompt: str) -> dict[str, float]:
+    def warmup(self, prompt: str, image_path: str | None = None) -> dict[str, float]:
         warmup_prompt = (prompt or "").strip()
         if not warmup_prompt:
             raise RuntimeError("Startup warmup prompt must be non-empty.")
+        # seg=2 ignores image_path (continuation segment); seg=1 / seg=1-post-LoRA
+        # take the image so the i2v code path gets compiled here instead of on
+        # the first real user request.
+        warmup_image = image_path or None
+        if warmup_image:
+            print(f"[GPU {self.gpu_id}] Startup warmup using i2v image: {warmup_image}")
 
         print(f"[GPU {self.gpu_id}] Startup warmup starting "
               "(synthetic segments: seg1, seg2, seg1-post-LoRA)")
@@ -522,7 +528,7 @@ class VideoGenerationWorker:
         r1 = self.generate_step(
             warmup_prompt,
             segment_idx=1,
-            image_path=None,
+            image_path=warmup_image,
             reset_conditioning=True,
         )
         r2 = self.generate_step(
@@ -544,7 +550,7 @@ class VideoGenerationWorker:
         r3 = self.generate_step(
             warmup_prompt,
             segment_idx=1,
-            image_path=None,
+            image_path=warmup_image,
             reset_conditioning=True,
         )
         warmup_total_ms = (time.perf_counter() - warmup_t0) * 1000.0

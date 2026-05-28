@@ -22,4 +22,4 @@ class MatrixGame2I2V480PConfig(WanI2V480PConfig):
     dmd_denoising_steps: list[int] | None = field(default_factory=lambda: [1000, 666, 333])
     warp_denoising_step: bool = True
     context_noise: int = 0
-    num_frames_per_block: int = 3
+    num_frames_per_block: int = 2

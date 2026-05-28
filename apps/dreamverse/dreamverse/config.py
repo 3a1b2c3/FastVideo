@@ -74,14 +74,23 @@ MODEL_CONFIG = MODEL_REGISTRY[DEFAULT_MODEL_ID]
 SESSION_TIMEOUT_SECONDS = 300
 
 # Frame settings
-# Lowered from 121 / 1088x1920 to ease warmup wall-time on 32 GB cards
-# (RTX 5090). LTX-2 *refinement* stage requires H and W divisible by 64
-# (NOT 32) -- ltx2_refine.py:88 enforces this. 544x960 was rejected; 576x1024
-# = 9*64 x 16*64 keeps the 1.78:1 aspect and is ~28% of default pixel area.
-# 49 frames = 13 latent frames (vs 31 at 121), cutting AR work by ~58%.
-NUM_FRAMES = 49
-FRAME_HEIGHT = 576
-FRAME_WIDTH = 1024
+# Lowered AGAIN from 49/576x1024 because LTX-2's 18.88B-param transformer +
+# VAE + Reason1 text encoder + activations exceeded 32 GB VRAM on the 5090.
+# Symptom: 140 s/step (vs. ~1-3 s/step expected) due to UMM page-faulting
+# tensors through PCIe.
+#
+# LTX-2 refinement requires H and W divisible by 64. Valid bucket geometry:
+#   384x640  (6*64 x 10*64) = 245760 px  (24% of 576x1024)
+#   320x576  (5*64 x  9*64) = 184320 px  (18% of 576x1024)
+#   256x448  (4*64 x  7*64) = 114688 px  (11% of 576x1024)
+# NUM_FRAMES must satisfy (N-1) % 8 == 0 (LTX-2's 8x temporal latent stride).
+# Valid: 17 (T=3 latents), 25 (T=4), 33 (T=5), 41 (T=6), 49 (T=7).
+#
+# Current: 384x640 / 25 frames = 24% spatial * 51% temporal = ~12% of
+# previous compute. Should fit comfortably with paging room to spare.
+NUM_FRAMES = 25
+FRAME_HEIGHT = 384
+FRAME_WIDTH = 640
 NUM_INFERENCE_STEPS = 5
 JPEG_QUALITY = 100
 BATCH_SIZE = 3
@@ -307,3 +316,6 @@ STARTUP_WARMUP_PROMPT = os.getenv(
      "golden light, gentle ocean waves, ultra detailed"),
 ).strip()
 STARTUP_WARMUP_TIMEOUT_SECONDS = max(1, _env_int("FASTVIDEO_STARTUP_WARMUP_TIMEOUT_SECONDS", 2400))
+# Optional image fed to warmup seg=1 (and seg=1 post-LoRA) so the i2v code path
+# is compiled instead of pure t2v. Empty/unset => warmup stays t2v.
+STARTUP_WARMUP_IMAGE = os.getenv("FASTVIDEO_STARTUP_WARMUP_IMAGE", "").strip() or None

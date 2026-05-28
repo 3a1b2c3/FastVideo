@@ -4,15 +4,19 @@
 :: Spawns backend + frontend in two separate cmd windows you can Ctrl-C to stop.
 ::
 :: Usage:
-::   run.bat                    backend on :8009, frontend (devtools) on :5299
-::   run.bat --mock             use dreamverse-mock-server (no GPU, UI-dev mode)
-::   run.bat --no-frontend      backend only
-::   run.bat --no-browser       skip opening the browser
+::   run.bat                              backend on :8009, frontend (devtools) on :5299
+::   run.bat --mock                       use dreamverse-mock-server (no GPU, UI-dev mode)
+::   run.bat --no-frontend                backend only
+::   run.bat --no-browser                 skip opening the browser
+::   run.bat --no-warmup                  skip 3-segment warmup (fast /readyz)
+::   run.bat --image <path>               override warmup image (i2v warmup)
+::   run.bat --t2v                        force pure t2v warmup (no image)
 ::
 :: Env overrides:
 ::   BE_PORT=8010 run.bat
 ::   FRONTEND_MODE=dev run.bat            (no devtools)
 ::   FRONTEND_MODE=single5s run.bat
+::   FASTVIDEO_STARTUP_WARMUP_IMAGE=...   override warmup image (same as --image)
 ::   CEREBRAS_API_KEY=...                 (LLM features off without these)
 ::   GROQ_API_KEY=...
 ::
@@ -28,15 +32,43 @@ cd /d "%~dp0"
 set MOCK=0
 set NO_FRONTEND=0
 set NO_BROWSER=0
+set NO_WARMUP=0
+set "WARMUP_IMAGE_ARG="
 :parse
 if "%~1"=="" goto args_done
 if /I "%~1"=="--mock"        ( set MOCK=1        & shift & goto parse )
 if /I "%~1"=="--no-frontend" ( set NO_FRONTEND=1 & shift & goto parse )
 if /I "%~1"=="--no-browser"  ( set NO_BROWSER=1  & shift & goto parse )
+if /I "%~1"=="--no-warmup"   ( set NO_WARMUP=1   & shift & goto parse )
+if /I "%~1"=="--t2v"         ( set "WARMUP_IMAGE_ARG=__EMPTY__" & shift & goto parse )
+if /I "%~1"=="--image"       ( set "WARMUP_IMAGE_ARG=%~2" & shift & shift & goto parse )
 echo WARN: ignoring unknown arg %~1
 shift
 goto parse
 :args_done
+
+:: --image <path>  -> override the warmup image for this launch.
+:: --t2v           -> force pure t2v warmup (clear the image env var).
+:: Otherwise FASTVIDEO_STARTUP_WARMUP_IMAGE keeps the default further below.
+if defined WARMUP_IMAGE_ARG (
+    if "%WARMUP_IMAGE_ARG%"=="__EMPTY__" (
+        set "FASTVIDEO_STARTUP_WARMUP_IMAGE="
+    ) else (
+        set "FASTVIDEO_STARTUP_WARMUP_IMAGE=%WARMUP_IMAGE_ARG%"
+    )
+)
+
+:: --no-warmup: skip the synthetic 3-segment startup warmup. /readyz flips
+:: green within ~2 min of launch (model load only) instead of ~17-25 min.
+:: TRADE-OFF: the first real user request takes the JIT/compile hit instead
+:: (~5-10 min latency on first generation). After that, subsequent requests
+:: are at normal speed. Use this when you want to verify the UI / API loop
+:: quickly and don't mind a slow first generation.
+if "%NO_WARMUP%"=="1" (
+    set "FASTVIDEO_ENABLE_STARTUP_WARMUP=0"
+    set "READY_TIMEOUT_S=600"
+    echo [run.bat] --no-warmup: FASTVIDEO_ENABLE_STARTUP_WARMUP=0, READY_TIMEOUT_S=600
+)
 
 :: --- defaults ---
 if not defined BE_PORT set BE_PORT=8009
@@ -53,6 +85,14 @@ if not defined DREAMVERSE_DISABLE_NVFP4 set "DREAMVERSE_DISABLE_NVFP4=1"
 set "REPO_ROOT=C:\workspace\world\FastVideo"
 set "VENV=%REPO_ROOT%\.venv"
 set "WEB=%~dp0web"
+
+:: Warm up the i2v code path (seg=1 with image) instead of pure t2v so the
+:: first real user image-to-video request doesn't take the JIT/compile hit.
+:: Image is a real-photo aerial beach shot from FastVideo/assets/images/,
+:: chosen to match the default warmup prompt ("cinematic drone shot over
+:: coastal cliffs at sunrise, golden light, gentle ocean waves").
+:: Unset / set empty to fall back to pure t2v warmup.
+if not defined FASTVIDEO_STARTUP_WARMUP_IMAGE set "FASTVIDEO_STARTUP_WARMUP_IMAGE=%REPO_ROOT%\assets\images\mixkit-aerial-shot-of-a-beach-with-sea-waves-1087.png"
 
 :: --- pre-flight checks ---
 if "%MOCK%"=="1" (
@@ -102,6 +142,16 @@ echo ============================================================
 echo   backend     : !BE_EXE! --port %BE_PORT%
 echo   backend URL : http://localhost:%BE_PORT%
 echo   NVFP4       : DREAMVERSE_DISABLE_NVFP4=%DREAMVERSE_DISABLE_NVFP4%  ^(1=skip ^(bf16 fallback^), 0=use NVFP4^)
+if defined FASTVIDEO_STARTUP_WARMUP_IMAGE (
+    if not "%FASTVIDEO_STARTUP_WARMUP_IMAGE%"=="" (
+        echo   warmup mode : i2v
+        echo   warmup img  : %FASTVIDEO_STARTUP_WARMUP_IMAGE%
+    ) else (
+        echo   warmup mode : t2v ^(no image^)
+    )
+) else (
+    echo   warmup mode : t2v ^(no image^)
+)
 if "%NO_FRONTEND%"=="0" (
     echo   frontend    : npm run %FE_NPM% ^(mode=%FRONTEND_MODE%^)
     echo   frontend URL: http://localhost:%FE_PORT%
@@ -116,8 +166,17 @@ start "dreamverse-be :%BE_PORT%" cmd /k ""!BE_EXE!" --port %BE_PORT%"
 :: --- wait for backend /readyz to return 200 ---
 :: The frontend has a "Dreamverse backend is not reachable. ... wait for /readyz
 :: to return 200 before retrying." guard, so opening the browser too early just
-:: shows that error. Poll until ready (or 5 min cap) before continuing.
-if not defined READY_TIMEOUT_S set READY_TIMEOUT_S=300
+:: shows that error. Poll until ready (or 30 min cap) before continuing.
+::
+:: 1800s gives the full LTX-2 3-segment warmup time to compile its flash-attn
+:: + bf16 kernels on Blackwell sm_120. Each segment takes ~5-7 min end-to-end
+:: (denoise + VAE + audio decode + save); the synthetic warmup hits seg1 +
+:: seg2 + seg1-post-LoRA = ~17-25 min total on a 5090 with current resolution
+:: (384x640 / 25 frames). Override via:
+::   set READY_TIMEOUT_S=600   then run.bat   (10 min - good if warmup off)
+::   set FASTVIDEO_ENABLE_STARTUP_WARMUP=0    skip warmup entirely (first
+::                                            user request takes the JIT hit)
+if not defined READY_TIMEOUT_S set READY_TIMEOUT_S=1800
 echo.
 echo Waiting for backend /readyz on :%BE_PORT% ^(up to %READY_TIMEOUT_S%s^) ...
 set BE_OK=0

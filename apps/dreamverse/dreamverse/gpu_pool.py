@@ -16,6 +16,7 @@ from dreamverse.config import (
     DEFAULT_MODEL_ID,
     MODEL_REGISTRY,
     STARTUP_WARMUP_ENABLED,
+    STARTUP_WARMUP_IMAGE,
     STARTUP_WARMUP_PROMPT,
     STARTUP_WARMUP_TIMEOUT_SECONDS,
 )
@@ -326,7 +327,7 @@ def gpu_worker_process(
                 try:
                     assert isinstance(cmd.payload, WarmupPayload), (f"WARMUP requires WarmupPayload, "
                                                                     f"got {type(cmd.payload).__name__}")
-                    timings = worker.warmup(cmd.payload.prompt)
+                    timings = worker.warmup(cmd.payload.prompt, cmd.payload.image_path)
                     response_queue.put(WarmupComplete(
                         user_id=cmd.user_id,
                         timings=timings,
@@ -403,7 +404,7 @@ def gpu_worker_process(
                 try:
                     assert isinstance(cmd.payload, WarmupPayload), (f"WARMUP requires WarmupPayload, "
                                                                     f"got {type(cmd.payload).__name__}")
-                    timings = worker.warmup(cmd.payload.prompt)
+                    timings = worker.warmup(cmd.payload.prompt, cmd.payload.image_path)
                     response_queue.put(WarmupComplete(
                         user_id=cmd.user_id,
                         timings=timings,
@@ -529,7 +530,7 @@ class GPUSlot:
                 warmup_response = await self._send_command(
                     Command(
                         CommandType.WARMUP,
-                        payload=WarmupPayload(prompt=STARTUP_WARMUP_PROMPT),
+                        payload=WarmupPayload(prompt=STARTUP_WARMUP_PROMPT, image_path=STARTUP_WARMUP_IMAGE),
                         user_id=f"__warmup_gpu_{self.gpu_id}__",
                     ),
                     timeout=float(STARTUP_WARMUP_TIMEOUT_SECONDS),

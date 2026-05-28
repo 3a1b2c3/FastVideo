@@ -44,6 +44,11 @@ REGISTRY: dict[str, tuple[list[str], str, str]] = {
     # them at runtime. (GTA variant intentionally omitted — not used.)
     "mg-base":   (["FastVideo/Matrix-Game-2.0-Base-Distilled-Diffusers"],      "basic_matrixgame2.py (universal/WASD)", ""),
     "mg-temple": (["FastVideo/Matrix-Game-2.0-TempleRun-Distilled-Diffusers"], "basic_matrixgame2.py (templerun)",      ""),
+    # Cosmos-Predict 2.5 (NVIDIA world model). 2B variant — ~12-15 GB total
+    # (transformer + Reason1 text encoder + VAE + tokenizer). Used by
+    # run_cosmos.bat (--t2w/--i2w/--v2w). Note: the HF repo bundles Reason1
+    # via `text_encoder/` subfolder, so this one entry pulls everything.
+    "cosmos25":  (["KyleShao/Cosmos-Predict2.5-2B-Diffusers"],   "run_cosmos.bat (Cosmos-Predict2.5 2B world model)", ""),
     "wan22":   (["Wan-AI/Wan2.2-TI2V-5B-Diffusers"],            "HY-WorldPlay WAN pipeline", ""),
     # NOTE: MMAudio (hkchengrex/MMAudio) is intentionally NOT in this
     # registry.  FastVideo references it only from the eval harness

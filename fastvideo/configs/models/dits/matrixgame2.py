@@ -56,7 +56,11 @@ class MatrixGame2WanVideoArchConfig(WanVideoArchConfig):
 
     local_attn_size: int = -1
     sink_size: int = 0
-    num_frames_per_block: int = 3
+    # Reduced from training-time 3 to 2 to shrink per-block latency and surface
+    # streamed frames in the UI ~33% sooner. causal_wanvideo asserts <=3; 2 is
+    # safe. Trained at 3, so block-boundary temporal coherence may be slightly
+    # worse than native -- revert if visual artifacts appear at block seams.
+    num_frames_per_block: int = 2
     text_len: int = 512
     text_dim: int = 0
     image_dim: int = 1280

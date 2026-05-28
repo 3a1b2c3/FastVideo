@@ -144,6 +144,7 @@ class UserStepPayload:
 @dataclass(frozen=True)
 class WarmupPayload:
     prompt: str
+    image_path: str | None = None
 
 
 @dataclass(frozen=True)
