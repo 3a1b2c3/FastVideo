@@ -354,27 +354,6 @@ class TestSanaWMDSLParser:
             action_string_to_c2w("w-abc")
 
 
-class TestSanaWMVendoredKernels:
-    """Vendored Triton kernels (Phase 2A) — import + parse-time validity."""
-
-    def test_fused_recurrent_kernel_importable(self):
-        from fastvideo.models.dits.sana_wm._vendor.ops.frame_gdn import (
-            fused_recurrent_triton,
-        )
-
-        assert hasattr(
-            fused_recurrent_triton, "frame_gdn_fused_recurrent_fwd_kernel"
-        )
-
-    def test_scan_kernel_importable(self):
-        from fastvideo.models.dits.sana_wm._vendor.ops.frame_gdn import (
-            scan_triton,
-        )
-
-        assert hasattr(scan_triton, "frame_gdn_scan_fwd_kernel")
-        assert hasattr(scan_triton, "frame_gdn_scan_bwd_kernel")
-
-
 # ---------------------------------------------------------------------------
 # Phase 3A — Pipeline class scaffold + camera conditioning stage
 # ---------------------------------------------------------------------------

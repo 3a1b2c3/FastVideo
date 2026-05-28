@@ -58,6 +58,16 @@ source .venv/bin/activate
 uv pip install fastvideo
 ```
 
+> **Editable install on slow / cross-mount filesystems (WSL `/mnt/c/...`, NFS, etc.)**
+> Add `--no-build-isolation` to skip uv's PEP 517 build sandbox. The sandbox reinstalls
+> torch + setuptools into a temp dir before building the wheel, which over a 9p / NFS
+> boundary can take 10+ minutes. With `--no-build-isolation`, uv reuses the torch
+> already installed in your active venv:
+> ```bash
+> uv pip install torch --index-url https://download.pytorch.org/whl/cu128  # prereq
+> uv pip install -e ".[dreamverse]" --no-build-isolation
+> ```
+
 Please see our [docs](https://hao-ai-lab.github.io/FastVideo/getting_started/installation/) for more detailed installation instructions.
 
 ## Sparse Distillation

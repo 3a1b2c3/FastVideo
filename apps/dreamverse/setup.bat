@@ -23,6 +23,8 @@
 ::     because the [dreamverse] extra is a fastvideo project extra.
 
 setlocal enableextensions enabledelayedexpansion
+:: Hardlink wheels from the uv cache into the venv (saves disk vs. copy mode).
+set "UV_LINK_MODE=hardlink"
 cd /d "%~dp0"
 
 :: --- parse args ---

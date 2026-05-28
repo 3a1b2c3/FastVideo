@@ -26,6 +26,8 @@ outputs_video
 video_samples_matrixgame2/
 *.frames.npz
 *.npz
+# Junction to ~\.cache\huggingface (see mklink /J)
+models_cache/
 checkpoints/
 sbatch.sh
 *.out
