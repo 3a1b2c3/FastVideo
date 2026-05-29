@@ -15,6 +15,10 @@ def main():
         vae_cpu_offload=False,
         text_encoder_cpu_offload=True,
         pin_cpu_memory=True,
+        # transformer/config.json in the HF repo ships _class_name="WanModel",
+        # which isn't in FastVideo's registry. model_index.json has the right
+        # name; override here to force the matrixgame3 class.
+        override_transformer_cls_name="MatrixGame3WanModel",
     )
 
     generator.generate_video(
